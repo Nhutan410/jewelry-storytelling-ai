@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+venv/
+__pycache__/
+*/__pycache__/
+*.py[cod]
+.streamlit/secrets.toml
+.DS_Store
+data/
+*.pdf
+PROMPT_FLOW.md
