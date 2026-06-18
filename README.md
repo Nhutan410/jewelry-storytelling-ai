@@ -1,26 +1,8 @@
 # AI Storytelling Assistant
 
-Ứng dụng Streamlit giúp tư vấn viên PNJ chọn khách hàng, chọn sản phẩm và sinh câu chuyện trang sức cá nhân hóa bằng OpenAI.
-
-## Tính năng chính
-
-- Đăng nhập đơn giản bằng username/password từ `.env`.
-- Xem dữ liệu khách hàng, persona và tín hiệu hành vi.
-- Lọc danh mục sản phẩm PNJ theo tên, giới tính, loại sản phẩm và khoảng giá.
-- Tự động chọn framework storytelling phù hợp.
-- Sinh câu chuyện cá nhân hóa và tin nhắn Zalo bằng OpenAI.
-
-## Yêu cầu
-
-- Docker và Docker Compose, hoặc Python 3.10+ nếu chạy local.
-- OpenAI API key.
-- File dữ liệu trong thư mục `data/`:
-  - `metadata.json`
-  - `customer_data_poc_enhanced.xlsx`
-
 ## Cấu hình `.env`
 
-Tạo file `.env` từ `.env.example` và điền giá trị thật:
+Tạo file `.env` từ `.env.example`:
 
 ```env
 OPENAI_API_KEY=sk-your-openai-api-key
@@ -49,7 +31,11 @@ ports:
   - "8502:8501"
 ```
 
-Sau đó mở `http://localhost:8502`.
+Sau đó mở:
+
+```text
+http://localhost:8502
+```
 
 ## Chạy bằng Docker CLI
 
@@ -73,6 +59,8 @@ docker run --rm --env-file .env --name storytelling -p 8502:8501 storytelling:la
 
 ## Chạy local bằng Python
 
+macOS/Linux:
+
 ```bash
 python -m venv venv
 source venv/bin/activate
@@ -80,7 +68,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Trên Windows:
+Windows:
 
 ```cmd
 python -m venv venv
