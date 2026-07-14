@@ -11,7 +11,8 @@ from modules.framework_selector import (
     select_framework, extract_signals, get_persona_icon,
     get_selection_explanation, FRAMEWORKS, DECISION_RULES,
 )
-from modules.story_generator import generate_story_stream, generate_zalo_stream
+from modules.prompt_builder import build_custom_story_inputs, select_custom_story_framework
+from modules.story_generator import generate_story_stream, generate_zalo_stream, generate_custom_story_stream
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -353,6 +354,10 @@ for key, default in {
     "story_customer_id": None,
     "story_product_id": None,
     "story_framework": None,
+    "story_mode": "classic",
+    "custom_story": None,
+    "custom_inputs": None,
+    "custom_retry_temp": 0.82,
     "page": 0,
     "retry_temp": 0.85,
     "current_customer_id": None,
@@ -470,6 +475,9 @@ with tab_main:
               </div>
               <hr class="gold-divider"/>
               <table class="info-table">
+                <tr><td>Giới tính</td><td>{customer.get('gioi_tinh','—')}</td></tr>
+                <tr><td>Tuổi</td><td>{customer.get('tuoi','—')}</td></tr>
+                <tr><td>Nghề nghiệp</td><td>{customer.get('nghe_nghiep','—')}</td></tr>
                 <tr><td>Phong cách</td><td>{customer.get('style','—')}</td></tr>
                 <tr><td>Ngân sách</td><td>{customer.get('budget','—')}</td></tr>
                 <tr><td>Ưa thích</td><td>{customer.get('preferred_type','—')} / {customer.get('material','—')}</td></tr>
@@ -614,15 +622,33 @@ with tab_main:
                     </div>
                     """, unsafe_allow_html=True)
 
-                    if st.button("📖 Kể chuyện", key=f"btn_{pid}_{idx}", use_container_width=True):
-                        st.session_state.selected_product = prod
-                        st.session_state.story = None
-                        st.session_state.zalo_msg = None
-                        st.session_state.story_customer_id = selected_id
-                        st.session_state.story_product_id = pid
-                        st.session_state.story_framework = framework_key
-                        st.session_state.retry_temp = 0.85
-                        st.rerun()
+                    btn_old, btn_new = st.columns(2)
+                    with btn_old:
+                        if st.button("📖 Kể chuyện", key=f"btn_{pid}_{idx}", use_container_width=True):
+                            st.session_state.selected_product = prod
+                            st.session_state.story_mode = "classic"
+                            st.session_state.story = None
+                            st.session_state.zalo_msg = None
+                            st.session_state.custom_story = None
+                            st.session_state.custom_inputs = None
+                            st.session_state.story_customer_id = selected_id
+                            st.session_state.story_product_id = pid
+                            st.session_state.story_framework = framework_key
+                            st.session_state.retry_temp = 0.85
+                            st.rerun()
+                    with btn_new:
+                        if st.button("✨ Bộ content", key=f"custom_btn_{pid}_{idx}", use_container_width=True):
+                            st.session_state.selected_product = prod
+                            st.session_state.story_mode = "custom"
+                            st.session_state.story = None
+                            st.session_state.zalo_msg = None
+                            st.session_state.custom_story = None
+                            st.session_state.custom_inputs = build_custom_story_inputs(customer, prod)
+                            st.session_state.story_customer_id = selected_id
+                            st.session_state.story_product_id = pid
+                            st.session_state.story_framework = framework_key
+                            st.session_state.custom_retry_temp = 0.82
+                            st.rerun()
 
         # Pagination
         pg1, pg2, pg3 = st.columns([2, 3, 2])
@@ -645,17 +671,35 @@ with tab_main:
     if prod:
         fw_key = st.session_state.story_framework or framework_key
         fw = FRAMEWORKS[fw_key]
+        story_mode = st.session_state.get("story_mode", "classic")
+        if story_mode == "custom" and st.session_state.custom_inputs is None:
+            cust_data = get_customer(customers_df, st.session_state.story_customer_id)
+            st.session_state.custom_inputs = build_custom_story_inputs(cust_data, prod)
+        custom_framework = None
+        if story_mode == "custom" and st.session_state.custom_inputs:
+            custom_framework, _ = select_custom_story_framework(st.session_state.custom_inputs)
 
         st.markdown("---")
-        st.markdown(f"""
-        <div class="story-panel">
-          <div class="story-header">
-            📖 CÂU CHUYỆN CÁ NHÂN HÓA &nbsp;·&nbsp;
-            {fw['icon']} {fw['name']} &nbsp;·&nbsp;
-            cho {st.session_state.story_customer_id} &nbsp;·&nbsp;
-            <span style="color:#888;font-size:0.88rem">{prod.get('name','')[:55]}…</span>
-          </div>
-        """, unsafe_allow_html=True)
+        if story_mode == "custom":
+            st.markdown(f"""
+            <div class="story-panel">
+              <div class="story-header">
+                ✨ BỘ NỘI DUNG STORYTELLING &nbsp;·&nbsp;
+                {custom_framework or 'Framework theo prompt mới'} &nbsp;·&nbsp;
+                cho {st.session_state.story_customer_id} &nbsp;·&nbsp;
+                <span style="color:#888;font-size:0.88rem">{prod.get('name','')[:55]}…</span>
+              </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="story-panel">
+              <div class="story-header">
+                📖 CÂU CHUYỆN CÁ NHÂN HÓA &nbsp;·&nbsp;
+                {fw['icon']} {fw['name']} &nbsp;·&nbsp;
+                cho {st.session_state.story_customer_id} &nbsp;·&nbsp;
+                <span style="color:#888;font-size:0.88rem">{prod.get('name','')[:55]}…</span>
+              </div>
+            """, unsafe_allow_html=True)
 
         # Mini product info
         sp1, sp2 = st.columns([1, 4])
@@ -679,104 +723,151 @@ with tab_main:
 
         st.markdown("---")
 
-        # ── Comparison: Original description vs AI story ──────────────────────
-        orig_col, story_col = st.columns([1, 1], gap="large")
+        if story_mode == "custom":
+            custom_inputs = st.session_state.custom_inputs
+            custom_framework, custom_reasons = select_custom_story_framework(custom_inputs)
+            reason_chips = "".join(f'<span class="badge badge-signal">{reason}</span>' for reason in custom_reasons)
 
-        with orig_col:
-            st.markdown('<div class="compare-label">📄 Mô tả gốc từ PNJ</div>', unsafe_allow_html=True)
-            original_desc = prod.get("description", "").strip()
-            if not original_desc:
-                original_desc = "(Không có mô tả gốc)"
-            st.markdown(
-                f'<div class="original-desc">{original_desc}</div>',
-                unsafe_allow_html=True,
-            )
-
-        with story_col:
-            st.markdown(f'<div class="compare-label">✨ Câu chuyện cá nhân hóa — {fw["icon"]} {fw["name"]}</div>', unsafe_allow_html=True)
-
-            if st.session_state.story is None and api_key:
-                try:
-                    cust_data = get_customer(customers_df, st.session_state.story_customer_id)
-
-                    def stream_gen():
-                        yield from generate_story_stream(cust_data, prod, fw_key, st.session_state.retry_temp)
-
-                    full_story = st.write_stream(stream_gen())
-                    st.session_state.story = full_story
-                    st.session_state.zalo_msg = None  # reset to trigger Zalo generation
-
-                except Exception as e:
-                    st.error(f"❌ Lỗi khi gọi OpenAI API: {str(e)}")
-
-            elif st.session_state.story:
-                st.markdown(
-                    f'<div class="story-text">{st.session_state.story}</div>',
-                    unsafe_allow_html=True,
-                )
-            elif not api_key:
-                st.warning("⚠️ Vui lòng thiết lập OPENAI_API_KEY để sinh câu chuyện.")
-
-        st.markdown("---")
-
-        # Action buttons
-        act1, act2, act3 = st.columns(3)
-        with act1:
-            if st.button("🔄 Tạo lại", use_container_width=True):
-                st.session_state.story = None
-                st.session_state.zalo_msg = None
-                st.session_state.retry_temp = min(1.2, st.session_state.retry_temp + 0.1)
-                st.rerun()
-        with act2:
-            if st.session_state.story:
-                st.code(st.session_state.story, language=None)
-        with act3:
-            prod_url = prod.get("url", "")
-            if prod_url:
-                st.link_button("🔗 Xem SP trên PNJ", prod_url, use_container_width=True)
-
-        # ── Zalo Message Panel ─────────────────────────────────────────────────
-        if st.session_state.story and api_key:
-            st.markdown("""
-            <div class="zalo-panel">
-              <div class="zalo-header">
-                <span>💬 Tin nhắn Zalo cho nhân viên</span>
-                <span class="zalo-badge">VĂN NÓI</span>
-              </div>
+            st.markdown(f"""
+            <div style="font-size:0.86rem;color:var(--muted);line-height:1.7;margin-bottom:12px;">
+              <strong>Khách hàng:</strong> {custom_inputs.get('gender','—')} · {custom_inputs.get('age','—')} tuổi ·
+              {custom_inputs.get('occupation','—')} · {custom_inputs.get('persona','—')} · {custom_inputs.get('cluster','—')} ·
+              Phong cách: {custom_inputs.get('style','—')} · Dịp mua suy ra: {custom_inputs.get('purchase_occasion','—')} ·
+              Ngân sách: {custom_inputs.get('budget','—')}
+            </div>
+            <div style="margin-bottom:12px;">{reason_chips}</div>
             """, unsafe_allow_html=True)
 
-            zalo_col, _ = st.columns([3, 2])
-            with zalo_col:
-                if st.session_state.zalo_msg is None:
+            if not api_key:
+                st.warning("⚠️ Vui lòng thiết lập OPENAI_API_KEY để sinh bộ nội dung storytelling.")
+            elif st.session_state.custom_story is None:
+                try:
+                    def custom_stream_gen():
+                        yield from generate_custom_story_stream(
+                            custom_inputs,
+                            temperature=st.session_state.custom_retry_temp,
+                        )
+
+                    full_custom_story = st.write_stream(custom_stream_gen())
+                    st.session_state.custom_story = full_custom_story
+                except Exception as e:
+                    st.error(f"❌ Lỗi khi gọi OpenAI API: {str(e)}")
+            else:
+                st.markdown(st.session_state.custom_story)
+
+            st.markdown("---")
+            act1, act2, act3 = st.columns(3)
+            with act1:
+                if st.button("🔄 Tạo lại content", use_container_width=True):
+                    st.session_state.custom_story = None
+                    st.session_state.custom_retry_temp = min(1.2, st.session_state.custom_retry_temp + 0.1)
+                    st.rerun()
+            with act2:
+                if st.session_state.custom_story:
+                    st.code(st.session_state.custom_story, language=None)
+            with act3:
+                prod_url = prod.get("url", "")
+                if prod_url:
+                    st.link_button("🔗 Xem SP trên PNJ", prod_url, use_container_width=True)
+        else:
+            # ── Comparison: Original description vs AI story ──────────────────
+            orig_col, story_col = st.columns([1, 1], gap="large")
+
+            with orig_col:
+                st.markdown('<div class="compare-label">📄 Mô tả gốc từ PNJ</div>', unsafe_allow_html=True)
+                original_desc = prod.get("description", "").strip()
+                if not original_desc:
+                    original_desc = "(Không có mô tả gốc)"
+                st.markdown(
+                    f'<div class="original-desc">{original_desc}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            with story_col:
+                st.markdown(f'<div class="compare-label">✨ Câu chuyện cá nhân hóa — {fw["icon"]} {fw["name"]}</div>', unsafe_allow_html=True)
+
+                if st.session_state.story is None and api_key:
                     try:
                         cust_data = get_customer(customers_df, st.session_state.story_customer_id)
 
-                        def zalo_stream_gen():
-                            yield from generate_zalo_stream(
-                                cust_data, prod, fw_key,
-                                st.session_state.story,
-                                temperature=0.80,
-                            )
+                        def stream_gen():
+                            yield from generate_story_stream(cust_data, prod, fw_key, st.session_state.retry_temp)
 
-                        full_zalo = st.write_stream(zalo_stream_gen())
-                        st.session_state.zalo_msg = full_zalo
+                        full_story = st.write_stream(stream_gen())
+                        st.session_state.story = full_story
+                        st.session_state.zalo_msg = None
 
                     except Exception as e:
-                        st.error(f"❌ Lỗi sinh tin nhắn Zalo: {str(e)}")
-                else:
+                        st.error(f"❌ Lỗi khi gọi OpenAI API: {str(e)}")
+
+                elif st.session_state.story:
                     st.markdown(
-                        f'<div class="zalo-bubble">{st.session_state.zalo_msg}</div>',
+                        f'<div class="story-text">{st.session_state.story}</div>',
                         unsafe_allow_html=True,
                     )
+                elif not api_key:
+                    st.warning("⚠️ Vui lòng thiết lập OPENAI_API_KEY để sinh câu chuyện.")
 
-                if st.session_state.zalo_msg:
-                    st.markdown(
-                        '<div class="zalo-hint">📋 Copy đoạn dưới để dán vào Zalo:</div>',
-                        unsafe_allow_html=True,
-                    )
-                    st.code(st.session_state.zalo_msg, language=None)
+            st.markdown("---")
 
-            st.markdown("</div>", unsafe_allow_html=True)
+            # Action buttons
+            act1, act2, act3 = st.columns(3)
+            with act1:
+                if st.button("🔄 Tạo lại", use_container_width=True):
+                    st.session_state.story = None
+                    st.session_state.zalo_msg = None
+                    st.session_state.retry_temp = min(1.2, st.session_state.retry_temp + 0.1)
+                    st.rerun()
+            with act2:
+                if st.session_state.story:
+                    st.code(st.session_state.story, language=None)
+            with act3:
+                prod_url = prod.get("url", "")
+                if prod_url:
+                    st.link_button("🔗 Xem SP trên PNJ", prod_url, use_container_width=True)
+
+            # ── Zalo Message Panel ─────────────────────────────────────────────
+            if st.session_state.story and api_key:
+                st.markdown("""
+                <div class="zalo-panel">
+                  <div class="zalo-header">
+                    <span>💬 Tin nhắn Zalo cho nhân viên</span>
+                    <span class="zalo-badge">VĂN NÓI</span>
+                  </div>
+                """, unsafe_allow_html=True)
+
+                zalo_col, _ = st.columns([3, 2])
+                with zalo_col:
+                    if st.session_state.zalo_msg is None:
+                        try:
+                            cust_data = get_customer(customers_df, st.session_state.story_customer_id)
+
+                            def zalo_stream_gen():
+                                yield from generate_zalo_stream(
+                                    cust_data, prod, fw_key,
+                                    st.session_state.story,
+                                    temperature=0.80,
+                                )
+
+                            full_zalo = st.write_stream(zalo_stream_gen())
+                            st.session_state.zalo_msg = full_zalo
+
+                        except Exception as e:
+                            st.error(f"❌ Lỗi sinh tin nhắn Zalo: {str(e)}")
+                    else:
+                        st.markdown(
+                            f'<div class="zalo-bubble">{st.session_state.zalo_msg}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                    if st.session_state.zalo_msg:
+                        st.markdown(
+                            '<div class="zalo-hint">📋 Copy đoạn dưới để dán vào Zalo:</div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.code(st.session_state.zalo_msg, language=None)
+
+                st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("</div>", unsafe_allow_html=True)
 

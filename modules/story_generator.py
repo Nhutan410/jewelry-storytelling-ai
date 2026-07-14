@@ -1,8 +1,16 @@
 import os
 from openai import OpenAI
-from .prompt_builder import SYSTEM_PROMPT, ZALO_SYSTEM_PROMPT, build_user_prompt, build_zalo_prompt
+from .prompt_builder import (
+    SYSTEM_PROMPT,
+    ZALO_SYSTEM_PROMPT,
+    CUSTOM_STORY_SYSTEM_PROMPT,
+    build_user_prompt,
+    build_zalo_prompt,
+    build_custom_story_prompt,
+)
 
 _client: OpenAI | None = None
+OPENAI_MODEL = "gpt-4o"
 
 
 def get_client() -> OpenAI:
@@ -20,7 +28,7 @@ def generate_story_stream(customer: dict, product: dict, framework_key: str, tem
     user_prompt = build_user_prompt(customer, product, framework_key)
 
     stream = client.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
@@ -41,13 +49,34 @@ def generate_zalo_stream(customer: dict, product: dict, framework_key: str, stor
     user_prompt = build_zalo_prompt(customer, product, framework_key, story_text)
 
     stream = client.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": ZALO_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
         temperature=temperature,
         max_tokens=200,
+        stream=True,
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
+def generate_custom_story_stream(inputs: dict, temperature: float = 0.82):
+    client = get_client()
+    user_prompt = build_custom_story_prompt(inputs)
+
+    stream = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[
+            {"role": "system", "content": CUSTOM_STORY_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=temperature,
+        max_tokens=2200,
         stream=True,
     )
 

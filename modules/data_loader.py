@@ -14,10 +14,10 @@ def load_products() -> list[dict]:
 
 @st.cache_data
 def load_customers() -> pd.DataFrame:
-    df = pd.read_excel(
-        DATA_DIR / "customer_data_poc_enhanced.xlsx",
-        sheet_name="profiles_enhanced",
-    )
+    path = DATA_DIR / "customer_data_poc_enhanced.xlsx"
+    workbook = pd.ExcelFile(path)
+    sheet_name = "profiles_enhanced" if "profiles_enhanced" in workbook.sheet_names else workbook.sheet_names[0]
+    df = pd.read_excel(path, sheet_name=sheet_name)
     return df
 
 
