@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from openai import OpenAI
 from .prompt_builder import (
@@ -19,7 +21,10 @@ def get_client() -> OpenAI:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY chưa được thiết lập.")
-        _client = OpenAI(api_key=api_key)
+        # Giới hạn timeout và số lần retry — mặc định SDK chờ tới 600s và tự
+        # retry 2 lần (kể cả lỗi quota vĩnh viễn như insufficient_quota, vốn
+        # không bao giờ tự khỏi), khiến lỗi hiện ra rất chậm với người dùng.
+        _client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
     return _client
 
 

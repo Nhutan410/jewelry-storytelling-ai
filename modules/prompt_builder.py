@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .framework_selector import FRAMEWORKS
 from .data_loader import format_price
 import re
@@ -20,7 +22,7 @@ SYSTEM_PROMPT = """Bạn là AI Storytelling Assistant của PNJ — chuyên gia
 Nhiệm vụ: Tạo một câu chuyện ngắn (3–4 đoạn, 180–220 từ) về sản phẩm trang sức PNJ. Câu chuyện phải được viết hoàn toàn từ ngôn ngữ cảm xúc và hình ảnh — phù hợp với bức tranh khách hàng được cung cấp.
 
 Nguyên tắc bắt buộc:
-1. KHÔNG sao chép nguyên văn mô tả marketing gốc. Tuy nhiên, các thông số kỹ thuật cụ thể (số giác cắt, hàm lượng vàng như 14K/18K, trọng lượng đá, kích thước...) PHẢI được giữ lại và dệt vào câu chuyện — chúng tạo sự tin cậy và độ cụ thể. Dùng chúng như "bằng chứng cảm xúc": ví dụ "57 giác cắt chuẩn xác" → mỗi giác là một lần không nhân nhượng.
+1. KHÔNG sao chép nguyên văn mô tả marketing gốc. Tuy nhiên, các chi tiết cụ thể THỰC SỰ có trong dữ liệu sản phẩm (tuổi vàng như 14K/18K, chất liệu, loại đá chính/đá phụ, dòng sản phẩm...) PHẢI được giữ lại và dệt vào câu chuyện — chúng tạo sự tin cậy và độ cụ thể. Dùng chúng như "bằng chứng cảm xúc": ví dụ "kim cương là đá chính, vàng trắng 18K là chất liệu" → ánh sáng và độ tinh khiết không thể giả mạo. TUYỆT ĐỐI không bịa thêm số liệu không có trong data (số giác cắt, trọng lượng, kích thước...) nếu dữ liệu không cung cấp.
 2. Tuân thủ ĐÚNG cấu trúc framework được chỉ định — đây là yêu cầu quan trọng nhất.
 3. Phản ánh bức tranh khách hàng một cách tinh tế — KHÔNG nhắc đến số liệu, dữ liệu cụ thể, hay bất kỳ thông tin nhận dạng nào.
 4. Ngôn ngữ: tự nhiên, ấm áp, như người bạn thấu hiểu đang kể — không phải nhân viên bán hàng, không phải copywriter quảng cáo.
@@ -71,10 +73,36 @@ Output đúng format:
 Trong Phần 3, giải thích 2-4 dòng, liên hệ trực tiếp với độ tuổi, nghề nghiệp, dịp mua, phong cách và ngân sách."""
 
 
-def build_features_text(features: dict) -> str:
-    if not features or not isinstance(features, dict):
+def build_features_text(product: dict) -> str:
+    """Build a 'Key: Value' spec string from the production catalog's structured
+    tags (product line, secondary stone, style/occasion tags). Material and
+    primary stone are surfaced as their own dedicated prompt lines by the
+    callers, so they're intentionally left out here to avoid repeating them.
+    The old catalog had a free-form per-product `features` dict (giác cắt,
+    trọng lượng...); the new catalog doesn't carry that granularity, so this
+    uses the categorical fields it does have instead — never fabricates
+    numbers that aren't present."""
+    if not product or not isinstance(product, dict):
         return ""
-    parts = [f"{k}: {v}" for k, v in features.items() if v not in (None, "", "None")]
+    parts = []
+
+    secondary_stone = product.get("secondary_stone_label", "")
+    primary_stone = product.get("primary_stone_label", "")
+    if secondary_stone and secondary_stone not in ("Không gắn đá", primary_stone):
+        parts.append(f"Đá phụ: {secondary_stone}")
+
+    product_line = str(product.get("product_line", "")).strip()
+    if product_line:
+        parts.append(f"Dòng sản phẩm: {product_line}")
+
+    style_tags = product.get("style_tags_vi") or []
+    if style_tags:
+        parts.append(f"Phong cách thiết kế: {', '.join(style_tags[:4])}")
+
+    occasion_tags = product.get("occasion_tags_vi") or []
+    if occasion_tags:
+        parts.append(f"Dịp phù hợp: {', '.join(occasion_tags[:4])}")
+
     return " | ".join(parts)
 
 
@@ -256,20 +284,18 @@ def infer_purchase_occasion(customer: dict) -> str:
 
 def build_custom_story_inputs(customer: dict, product: dict) -> dict:
     """Build the data-backed input object for the custom multi-format storytelling prompt."""
-    detail_desc = product.get("detail_description", "").strip()
-    if not detail_desc:
-        detail_desc = product.get("description", "").strip()
+    short_desc = product.get("short_description", "").strip()
 
     return {
-        "product_description": detail_desc,
-        "product_original_description": product.get("description", "").strip(),
+        "product_description": short_desc,
         "product_name": product.get("name", ""),
         "sku": product.get("sku", ""),
         "price": product.get("price", 0),
-        "main_stone": product.get("main_stone", ""),
-        "features_text": build_features_text(product.get("features", {})),
-        "categories": ", ".join(product.get("categories", [])),
-        "product_gender": product.get("gender", ""),
+        "main_stone": product.get("primary_stone_label", ""),
+        "product_material": product.get("material_label", ""),
+        "features_text": build_features_text(product),
+        "categories": product.get("product_type_label", ""),
+        "product_gender": product.get("gender_label", ""),
         "gender": customer.get("gioi_tinh", ""),
         "age": customer.get("tuoi", ""),
         "occupation": customer.get("nghe_nghiep", ""),
@@ -354,13 +380,11 @@ def build_user_prompt(customer: dict, product: dict, framework_key: str) -> str:
     fw = FRAMEWORKS[framework_key]
 
     # Product data
-    features_text = build_features_text(product.get("features", {}))
+    features_text = build_features_text(product)
     price_formatted = format_price(product.get("price", 0))
-
-    # Use detail_description as primary; fall back to description
-    detail_desc = product.get("detail_description", "").strip()
-    if not detail_desc:
-        detail_desc = product.get("description", "").strip()
+    material_label = product.get("material_label", "") or "—"
+    stone_label = product.get("primary_stone_label", "") or "—"
+    short_desc = product.get("short_description", "").strip()
 
     # Customer context — abstract observations, no IDs or raw numbers
     hints = build_context_hints(customer)
@@ -387,19 +411,17 @@ Quan sát thêm từ hành vi:{hints_block}
 ━━━ THÔNG TIN SẢN PHẨM (NGUYÊN LIỆU THÔ — KHÔNG SAO CHÉP) ━━━
   • Tên: {product.get('name', '')}
   • Giá bán: {price_formatted} VND
-  • Chất liệu chính: {product.get('main_stone', '')}
-  • Thông số kỹ thuật (PHẢI giữ lại ít nhất 1–2 chi tiết này trong story, dệt vào ngôn ngữ cảm xúc): {features_text if features_text else 'Không có thông số'}
+  • Chất liệu: {material_label}
+  • Đá chính: {stone_label}
+  • Thông số/đặc điểm (PHẢI giữ lại ít nhất 1–2 chi tiết này trong story, dệt vào ngôn ngữ cảm xúc): {features_text if features_text else 'Không có thông số bổ sung'}
 
-Mô tả thương hiệu gốc (VIẾT LẠI hoàn toàn — đây chỉ là tham khảo, không phải để sao chép):
-"{product.get('description', '')}"
-
-Chi tiết thiết kế & chất liệu (nguyên liệu cảm xúc chính — khai thác để tạo hình ảnh):
-"{detail_desc}"
+Mô tả sản phẩm từ PNJ (VIẾT LẠI hoàn toàn bằng ngôn ngữ cảm xúc — đây chỉ là tham khảo, không phải để sao chép; đây là nguyên liệu cảm xúc chính, khai thác để tạo hình ảnh):
+"{short_desc}"
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Viết câu chuyện 3–4 đoạn (180–220 từ) theo đúng cấu trúc {fw['name']} ở trên.
   • Phản ánh bức tranh khách hàng tinh tế — không nhắc số liệu hành vi, không lộ thông tin cá nhân.
-  • BẮT BUỘC giữ lại ít nhất 1–2 thông số kỹ thuật cụ thể (số giác cắt, hàm lượng vàng, trọng lượng đá...) và chuyển hóa chúng thành hình ảnh cảm xúc trong câu chuyện."""
+  • BẮT BUỘC giữ lại ít nhất 1–2 chi tiết cụ thể THỰC SỰ có trong dữ liệu (chất liệu, tuổi vàng, đá chính, dòng sản phẩm...) và chuyển hóa chúng thành hình ảnh cảm xúc trong câu chuyện. KHÔNG bịa số liệu (giác cắt, trọng lượng...) không có trong dữ liệu trên."""
 
     return prompt
 
@@ -417,8 +439,9 @@ def build_custom_story_prompt(inputs: dict) -> str:
     product_lines += _optional_line("Giá bán", f"{price_formatted} VND" if _has_value(inputs.get("price")) else "")
     product_lines += _optional_line("Nhóm sản phẩm", inputs.get("categories"))
     product_lines += _optional_line("Giới tính sản phẩm", inputs.get("product_gender"))
-    product_lines += _optional_line("Đá/chất liệu chính", inputs.get("main_stone"))
-    product_lines += _optional_line("Thông số kỹ thuật", inputs.get("features_text"))
+    product_lines += _optional_line("Chất liệu", inputs.get("product_material"))
+    product_lines += _optional_line("Đá chính", inputs.get("main_stone"))
+    product_lines += _optional_line("Thông số/đặc điểm", inputs.get("features_text"))
 
     customer_lines = ""
     customer_lines += _optional_line("Giới tính khách hàng", inputs.get("gender"))
@@ -445,11 +468,8 @@ def build_custom_story_prompt(inputs: dict) -> str:
 ━━━ INPUT SẢN PHẨM ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {product_block}
 
-Nội dung mô tả gốc/chi tiết sản phẩm từ data:
+Mô tả sản phẩm từ data (viết lại hoàn toàn bằng ngôn ngữ tự nhiên, không sao chép máy móc):
 \"\"\"{inputs.get('product_description', '').strip()}\"\"\"
-
-Mô tả marketing gốc nếu có:
-\"\"\"{inputs.get('product_original_description', '').strip()}\"\"\"
 
 ━━━ INPUT KHÁCH HÀNG ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {customer_block}
@@ -534,7 +554,8 @@ THÔNG TIN KHÁCH HÀNG:
 SẢN PHẨM:
   • Tên: {product.get('name', '')}
   • Giá: {price_formatted} ₫
-  • Chất liệu: {product.get('main_stone', '')}
+  • Chất liệu: {product.get('material_label', '') or '—'}
+  • Đá chính: {product.get('primary_stone_label', '') or '—'}
 
 CÂU CHUYỆN GỐC (tham khảo — KHÔNG sao chép, chỉ lấy tinh thần):
 \"\"\"{story_text[:500]}\"\"\"

@@ -13,6 +13,8 @@ from modules.framework_selector import (
 )
 from modules.prompt_builder import build_custom_story_inputs, select_custom_story_framework
 from modules.story_generator import generate_story_stream, generate_zalo_stream, generate_custom_story_stream
+from modules.product_recommender import PRODUCT_TYPE_LABELS, canonical_product_type
+from modules.recommendation import get_recommendations_for_customer
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -134,7 +136,28 @@ html, body, [data-testid="stAppViewContainer"] {
 }
 .prod-price { color: var(--gold); font-weight: 700; font-size: 1rem; margin: 4px 0 2px; }
 .prod-meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 10px; }
-.prod-rating { color: #f5a623; font-size: 0.8rem; margin-bottom: 4px; }
+.prod-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.prod-tag {
+    background: var(--gold-pale); color: var(--gold); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1px 7px; font-size: 0.7rem; font-weight: 600;
+}
+
+/* ── Recommendation score badge ── */
+.score-ribbon {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px; font-size: 0.78rem;
+}
+.score-value { font-weight: 800; font-size: 0.95rem; }
+.score-evidence { color: var(--muted); font-size: 0.74rem; line-height: 1.5; margin: 2px 0 8px; min-height: 2.1rem; }
+.mode-toggle-caption { color: var(--muted); font-size: 0.82rem; margin: 2px 0 10px; }
+
+/* ── Catalog mode radio (Gợi ý / Toàn bộ danh mục) — force dark, bold text
+   regardless of the viewer's OS/browser theme, for readability ── */
+[data-testid="stRadio"] label p,
+[data-testid="stRadio"] label span {
+    color: var(--text) !important;
+    font-weight: 700 !important;
+}
 
 /* ── Badges ── */
 .badge {
@@ -368,6 +391,7 @@ for key, default in {
 # ── Load data ──────────────────────────────────────────────────────────────────
 products = load_products()
 customers_df = load_customers()
+products_by_id = {p.get("product_id"): p for p in products}
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -412,6 +436,24 @@ def _format_target_personas(targets: list) -> str:
     }
     labels = [persona_map.get(t, t) for t in targets]
     return " · ".join(labels)
+
+
+def _score_color(score: float) -> str:
+    if score >= 85:
+        return "#2E7D32"
+    if score >= 70:
+        return "#B8860B"
+    return "#9E9E9E"
+
+
+def _matches_gender_filter(item: dict, gender_filter: str) -> bool:
+    """Works for both full-catalog products (gender_label/audience_label keys)
+    and recommender score dicts (gender/audience keys already Vietnamese-labeled)."""
+    if gender_filter == "Tất cả":
+        return True
+    if gender_filter == "Trẻ em":
+        return (item.get("audience_label") or item.get("audience") or "") == "Trẻ em"
+    return (item.get("gender_label") or item.get("gender") or "") == gender_filter
 
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
@@ -532,26 +574,64 @@ with tab_main:
     with col_right:
         st.markdown('<div class="section-title">🛍️ Danh mục sản phẩm</div>', unsafe_allow_html=True)
 
+        # Reset trang khi đổi khách hàng, để không bị lệch trang giữa 2 tệp dữ liệu khác nhau
+        if st.session_state.get("catalog_customer_id") != selected_id:
+            st.session_state.catalog_customer_id = selected_id
+            st.session_state.page = 0
+
+        catalog_mode = st.radio(
+            "Chế độ hiển thị",
+            options=["reco", "all"],
+            format_func=lambda v: "🎯 Sản phẩm gợi ý cho khách" if v == "reco" else "📋 Toàn bộ danh mục",
+            horizontal=True,
+            label_visibility="collapsed",
+            key="catalog_mode",
+        )
+
+        recommendations: list[dict] = []
+        if catalog_mode == "reco" and customer:
+            recommendations = get_recommendations_for_customer(customer, top_n=200)
+
+        if catalog_mode == "reco":
+            if recommendations:
+                filtered_count = recommendations[0].get("filtered_count", len(recommendations))
+                st.markdown(
+                    f'<div class="mode-toggle-caption">🎯 {len(recommendations)} sản phẩm phù hợp nhất '
+                    f'(trên {filtered_count} sản phẩm đã qua bộ lọc cứng theo ngân sách/loại SP/người thụ hưởng), '
+                    f'xếp hạng theo điểm phù hợp — cùng logic gợi ý như hệ thống NBA.</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    '<div class="mode-toggle-caption">🎯 Chưa tìm được sản phẩm khớp cứng cho khách này — hãy thử xem "Toàn bộ danh mục".</div>',
+                    unsafe_allow_html=True,
+                )
+            source_products = recommendations
+        else:
+            source_products = products
+
         f1, f2, f3, f4 = st.columns([3, 2, 2, 2])
         with f1:
             search_q = st.text_input("Tìm kiếm", placeholder="Tìm theo tên...", label_visibility="collapsed")
         with f2:
             gender_filter = st.selectbox("Giới tính", ["Tất cả", "Nữ", "Nam", "Unisex", "Trẻ em"], label_visibility="collapsed")
 
-        all_cats = set()
-        for p in products:
-            for c in p.get("categories", []):
-                all_cats.add(c)
-        top_cats = sorted([c for c in all_cats if len(c) < 20])
-        cat_opts = ["Tất cả"] + top_cats[:20]
+        cat_opts = ["Tất cả"] + list(dict.fromkeys(PRODUCT_TYPE_LABELS.values()))
 
         with f3:
             cat_filter = st.selectbox("Loại SP", cat_opts, label_visibility="collapsed")
         with f4:
-            smart_filter = st.button("⚡ Lọc theo KH", use_container_width=True)
+            if catalog_mode == "all":
+                smart_filter = st.button("⚡ Lọc theo KH", use_container_width=True)
+            else:
+                smart_filter = False
+                st.markdown(
+                    '<div style="padding-top:8px;color:var(--muted);font-size:0.78rem">Đã cá nhân hoá theo khách</div>',
+                    unsafe_allow_html=True,
+                )
 
-        prices = [p.get("price", 0) for p in products if p.get("price", 0) > 0]
-        min_price, max_price = int(min(prices)), int(max(prices))
+        all_prices = [p.get("price", 0) for p in products if p.get("price", 0) > 0]
+        min_price, max_price = int(min(all_prices)), int(max(all_prices))
         price_range = st.slider(
             "Giá (VND)", min_value=min_price, max_value=max_price,
             value=(min_price, max_price), step=500_000, format="%d",
@@ -559,19 +639,17 @@ with tab_main:
         )
 
         if smart_filter and customer:
-            preferred_type = customer.get("preferred_type", "")
-            if preferred_type:
-                for c in top_cats:
-                    if preferred_type.lower() in c.lower():
-                        cat_filter = c
-                        break
+            desired_type = canonical_product_type(customer.get("preferred_type", ""))
+            if desired_type:
+                cat_filter = PRODUCT_TYPE_LABELS.get(desired_type, cat_filter)
 
-        # Filter
+        # Filter — áp dụng cùng bộ lọc cho cả 2 chế độ, giữ nguyên thứ tự gốc
+        # (theo điểm phù hợp ở chế độ gợi ý, theo catalog ở chế độ toàn bộ)
         filtered = [
-            p for p in products
+            p for p in source_products
             if (not search_q or search_q.lower() in p.get("name", "").lower())
-            and (gender_filter == "Tất cả" or p.get("gender", "") == gender_filter)
-            and (cat_filter == "Tất cả" or cat_filter in p.get("categories", []))
+            and _matches_gender_filter(p, gender_filter)
+            and (cat_filter == "Tất cả" or p.get("product_type_label", "") == cat_filter)
             and price_range[0] <= p.get("price", 0) <= price_range[1]
         ]
 
@@ -594,38 +672,52 @@ with tab_main:
             grid = st.columns(3, gap="small")
             for idx, prod in enumerate(page_products):
                 with grid[idx % 3]:
-                    pid = prod.get("id")
+                    pid = prod.get("product_id")
                     name = prod.get("name", "Sản phẩm")
                     price = prod.get("price", 0)
                     image_url = prod.get("image_url", "")
-                    rating = prod.get("rating", "5")
-                    sold = prod.get("sold_text", "")
-
-                    try:
-                        r = float(rating)
-                        stars = "★" * int(r) + "☆" * (5 - int(r))
-                    except (ValueError, TypeError):
-                        stars = "★★★★★"
+                    product_type_label = prod.get("product_type_label", "")
+                    material_label = prod.get("material_label") or prod.get("material", "")
+                    stone_label = prod.get("primary_stone_label") or prod.get("primary_stone", "")
 
                     if image_url:
                         img_html = f'<img src="{image_url}" alt="{name}" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" /><div class="img-placeholder" style="display:none">💍</div>'
                     else:
                         img_html = '<div class="img-placeholder">💍</div>'
 
+                    tag_chips = "".join(
+                        f'<span class="prod-tag">{t}</span>'
+                        for t in [product_type_label, material_label] if t
+                    )
+
+                    score_html = ""
+                    if catalog_mode == "reco":
+                        score = float(prod.get("score") or 0)
+                        color = _score_color(score)
+                        top_reason = (prod.get("evidence") or ["—"])[0]
+                        score_html = (
+                            '<div class="score-ribbon">'
+                            f'<span class="prod-tag">#{idx + 1 + start}</span>'
+                            f'<span class="score-value" style="color:{color}">{score:.0f}/100</span>'
+                            '</div>'
+                            f'<div class="score-evidence">{top_reason}</div>'
+                        )
+
                     st.markdown(f"""
                     <div class="product-card">
                       {img_html}
-                      <div class="prod-rating">{stars} {rating}</div>
+                      {score_html}
                       <div class="prod-name">{name}</div>
                       <div class="prod-price">{format_price(price)} ₫</div>
-                      <div class="prod-meta">Đã bán {sold}</div>
+                      <div class="prod-tags">{tag_chips}</div>
+                      <div class="prod-meta">{stone_label if stone_label and stone_label != 'Không gắn đá' else ''}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
                     btn_old, btn_new = st.columns(2)
                     with btn_old:
                         if st.button("📖 Kể chuyện", key=f"btn_{pid}_{idx}", use_container_width=True):
-                            st.session_state.selected_product = prod
+                            st.session_state.selected_product = products_by_id.get(pid, prod)
                             st.session_state.story_mode = "classic"
                             st.session_state.story = None
                             st.session_state.zalo_msg = None
@@ -638,12 +730,13 @@ with tab_main:
                             st.rerun()
                     with btn_new:
                         if st.button("✨ Bộ content", key=f"custom_btn_{pid}_{idx}", use_container_width=True):
-                            st.session_state.selected_product = prod
+                            full_prod = products_by_id.get(pid, prod)
+                            st.session_state.selected_product = full_prod
                             st.session_state.story_mode = "custom"
                             st.session_state.story = None
                             st.session_state.zalo_msg = None
                             st.session_state.custom_story = None
-                            st.session_state.custom_inputs = build_custom_story_inputs(customer, prod)
+                            st.session_state.custom_inputs = build_custom_story_inputs(customer, full_prod)
                             st.session_state.story_customer_id = selected_id
                             st.session_state.story_product_id = pid
                             st.session_state.story_framework = framework_key
@@ -716,8 +809,9 @@ with tab_main:
             st.markdown(f"""
             **{prod.get('name','')}**
             - Giá: **{format_price(prod.get('price',0))} ₫**
-            - Chất liệu: {prod.get('main_stone','')}
-            - Đã bán: {prod.get('sold_text','')} &nbsp;·&nbsp; ★ {prod.get('rating','')}
+            - Chất liệu: {prod.get('material_label','') or '—'}
+            - Đá chính: {prod.get('primary_stone_label','') or '—'}
+            - Loại SP: {prod.get('product_type_label','') or '—'}
             - Mã SKU: `{prod.get('sku','')}`
             """)
 
@@ -775,7 +869,7 @@ with tab_main:
 
             with orig_col:
                 st.markdown('<div class="compare-label">📄 Mô tả gốc từ PNJ</div>', unsafe_allow_html=True)
-                original_desc = prod.get("description", "").strip()
+                original_desc = prod.get("short_description", "").strip()
                 if not original_desc:
                     original_desc = "(Không có mô tả gốc)"
                 st.markdown(
