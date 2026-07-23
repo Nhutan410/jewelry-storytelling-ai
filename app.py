@@ -13,7 +13,7 @@ from modules.framework_selector import (
 )
 from modules.prompt_builder import build_custom_story_inputs, select_custom_story_framework
 from modules.story_generator import generate_story_stream, generate_zalo_stream, generate_custom_story_stream
-from modules.product_recommender import PRODUCT_TYPE_LABELS, canonical_product_type
+from modules.product_recommender import PRODUCT_TYPE_LABELS, SCORE_WEIGHTS, canonical_product_type
 from modules.recommendation import get_recommendations_for_customer
 
 # ── Page config ────────────────────────────────────────────────────────────────
@@ -135,7 +135,6 @@ html, body, [data-testid="stAppViewContainer"] {
     overflow: hidden; line-height: 1.4; min-height: 2.5rem;
 }
 .prod-price { color: var(--gold); font-weight: 700; font-size: 1rem; margin: 4px 0 2px; }
-.prod-meta { color: var(--muted); font-size: 0.78rem; margin-bottom: 10px; }
 .prod-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .prod-tag {
     background: var(--gold-pale); color: var(--gold); border: 1px solid var(--border);
@@ -150,6 +149,12 @@ html, body, [data-testid="stAppViewContainer"] {
 .score-value { font-weight: 800; font-size: 0.95rem; }
 .score-evidence { color: var(--muted); font-size: 0.74rem; line-height: 1.5; margin: 2px 0 8px; min-height: 2.1rem; }
 .mode-toggle-caption { color: var(--muted); font-size: 0.82rem; margin: 2px 0 10px; }
+
+/* ── Score breakdown (bên trong expander "Chi tiết điểm") ── */
+.score-bar-row { margin: 5px 0; }
+.score-bar-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.74rem; }
+.score-bar-track { height: 6px; background: var(--gold-pale); border: 1px solid var(--border); border-radius: 99px; overflow: hidden; margin-top: 3px; }
+.score-bar-fill { height: 100%; background: var(--gold); border-radius: 99px; }
 
 /* ── Catalog mode radio (Gợi ý / Toàn bộ danh mục) — force dark, bold text
    regardless of the viewer's OS/browser theme, for readability ── */
@@ -446,6 +451,39 @@ def _score_color(score: float) -> str:
     return "#9E9E9E"
 
 
+SCORE_BREAKDOWN_LABELS = {
+    "budget": "Ngân sách",
+    "category": "Loại SP",
+    "occasion": "Dịp mua",
+    "material_stone": "Chất liệu/đá",
+    "recipient_profile": "Tệp người thụ hưởng",
+    "style": "Style",
+    "segment_value": "Phân khúc",
+    "popularity": "Bán chạy",
+}
+
+
+def _render_score_breakdown(breakdown: dict) -> None:
+    """Render each scoring component as a labeled progress bar (0 → weight)."""
+    if not isinstance(breakdown, dict) or not breakdown:
+        st.caption("Không có dữ liệu chi tiết điểm.")
+        return
+    rows = []
+    for key, label in SCORE_BREAKDOWN_LABELS.items():
+        if key not in breakdown:
+            continue
+        max_value = SCORE_WEIGHTS.get(key, 0)
+        value = float(breakdown.get(key) or 0)
+        pct = 0 if max_value <= 0 else max(0, min(100, value / max_value * 100))
+        rows.append(f"""
+        <div class="score-bar-row">
+          <div class="score-bar-label"><span>{label}</span><span>{value:g}/{max_value:g}</span></div>
+          <div class="score-bar-track"><div class="score-bar-fill" style="width:{pct:.0f}%"></div></div>
+        </div>
+        """)
+    st.markdown("".join(rows), unsafe_allow_html=True)
+
+
 def _matches_gender_filter(item: dict, gender_filter: str) -> bool:
     """Works for both full-catalog products (gender_label/audience_label keys)
     and recommender score dicts (gender/audience keys already Vietnamese-labeled)."""
@@ -685,9 +723,10 @@ with tab_main:
                     else:
                         img_html = '<div class="img-placeholder">💍</div>'
 
+                    stone_chip = stone_label if stone_label and stone_label != "Không gắn đá" else ""
                     tag_chips = "".join(
                         f'<span class="prod-tag">{t}</span>'
-                        for t in [product_type_label, material_label] if t
+                        for t in [product_type_label, material_label, stone_chip] if t
                     )
 
                     score_html = ""
@@ -710,9 +749,12 @@ with tab_main:
                       <div class="prod-name">{name}</div>
                       <div class="prod-price">{format_price(price)} ₫</div>
                       <div class="prod-tags">{tag_chips}</div>
-                      <div class="prod-meta">{stone_label if stone_label and stone_label != 'Không gắn đá' else ''}</div>
                     </div>
                     """, unsafe_allow_html=True)
+
+                    if catalog_mode == "reco":
+                        with st.expander("📊 Chi tiết điểm", expanded=False):
+                            _render_score_breakdown(prod.get("score_breakdown") or {})
 
                     btn_old, btn_new = st.columns(2)
                     with btn_old:

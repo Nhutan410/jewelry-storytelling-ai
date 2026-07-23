@@ -88,7 +88,7 @@ ADJACENT_PRODUCT_TYPES = {
 MATERIAL_LABELS = {
     "silver": "Bạc",
     "white_gold": "Vàng trắng",
-    "yellow_gold": "Vàng vàng",
+    "yellow_gold": "Vàng",
     "italian_gold": "Vàng Ý",
     "alloy": "Hợp kim",
 }
